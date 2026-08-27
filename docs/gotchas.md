@@ -623,3 +623,23 @@ Things that each cost us hours, in rough order of pain. Worth skimming before yo
     speculative-decoding metrics shape
     (`speculative_decoding.num_draft_tokens`/`num_accepted_draft_tokens`),
     which our DFlash2 patches don't populate. Not fixed here.
+
+
+44. **`VLLM_DFLASH2_CHAIN=1` (commit c954724, #38) is worth more than its
+    own PR claims, if your traffic matches its gate.** The feature only
+    engages on greedy decoding (a point-mass proposal can hurt quality at
+    temperature>0, so it deliberately stays inert outside that regime) -
+    our default sampling config runs temp=1.0, so it's a free, zero-risk
+    toggle that simply won't fire for normal chat. Where it does fire, the
+    upstream PR's own number (256.9 -> 276.1 tok/s, +7% on a "copy"
+    workload) undersells it: that's measured against an already
+    lookup-augmented DFlash2 baseline. Our A/B against a plain
+    original-generation control, same box, same greedy settings: 237.5
+    tok/s on a copy-back task vs 107.4 tok/s generating fresh text - >2x,
+    not +7%, when isolated against the case it's actually replacing
+    (skipping the drafter forward pass + graph replay entirely, not just
+    beating a better drafter). Verified the output is still correct: a
+    truncated (`finish_reason: length`) copy-back response matched the
+    source text byte-for-byte up to the cutoff. If you run anything greedy
+    that echoes its own context back - diffs, quoted text, code edits that
+    leave most lines untouched - turn this on.
