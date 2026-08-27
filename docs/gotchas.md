@@ -599,3 +599,27 @@ Things that each cost us hours, in rough order of pain. Worth skimming before yo
     And when eviction probing, keep the resend prompt BYTE-identical: a
     two-token label difference shifts every block hash and manufactures a
     convincing, fake "per-request hash instability" (ask how we know).
+
+
+43. **vLLM already ships per-request timing and cache-hit stats natively
+    (0.27.1+) - three flags, not a patch.** `--enable-per-request-metrics`
+    populates a real `metrics` object (`time_to_first_token_ms`,
+    `generation_time_ms`, `queue_time_ms`, `mean_itl_ms`,
+    `tokens_per_second`) computed server-side from `RequestStateStats` vLLM
+    already tracks internally; `--enable-prompt-tokens-details` turns on
+    `usage.prompt_tokens_details.cached_tokens`/`created_cache_tokens`.
+    Neither one needs anything from `patches/`. The trap: in streaming mode
+    the metrics/usage chunk is only emitted if the *client* sends
+    `stream_options.include_usage=true` - most chat UIs (including
+    llama-swap's own) don't, so metrics silently stay empty for exactly the
+    traffic you actually want to see them on. `--enable-force-include-usage`
+    removes that gate server-side, unconditionally. Also needed: llama-swap
+    >= v251 (`internal/server: parse vLLM speculative decoding metrics`,
+    #1039) - anything older doesn't recognize vLLM's `metrics` object at
+    all, and its Activity tab just shows zeros/blanks for every vLLM-backed
+    model, which reads exactly like a broken deployment rather than an old
+    proxy version. DFlash2's `draft_tokens`/`draft_acc_tokens` still show
+    `-1` in that tab - llama-swap's parser expects vLLM's *native*
+    speculative-decoding metrics shape
+    (`speculative_decoding.num_draft_tokens`/`num_accepted_draft_tokens`),
+    which our DFlash2 patches don't populate. Not fixed here.
