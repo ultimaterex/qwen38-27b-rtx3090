@@ -36,6 +36,14 @@ x-qwen: &qwen
       required: false
   environment:
     HOME: /cache
+    # Must be forwarded explicitly: the ports: mapping below substitutes ${PORT}
+    # at the compose-file level (host side), but that alone does NOT put PORT in
+    # the container's own env. Without this, start_qwen.sh's `PORT=${PORT:-18020}`
+    # always falls back to 18020 inside the container, while llama-swap maps
+    # host:<dynamic-port> -> container:<dynamic-port> - a mismatch that's silent
+    # whenever llama-swap happens to pick 18020, and a "connection reset by peer"
+    # / 5-minute health-check timeout every other time. Confirmed 2026-08-27.
+    PORT: ${PORT:-18020}
   volumes:
     - ${MODELS_DIR:-./models}:/app/models
     - qwen-cache:/cache
