@@ -44,6 +44,16 @@ x-qwen: &qwen
     # whenever llama-swap happens to pick 18020, and a "connection reset by peer"
     # / 5-minute health-check timeout every other time. Confirmed 2026-08-27.
     PORT: ${PORT:-18020}
+    # Same forwarding problem as PORT above: env_file only injects what's
+    # literally written in .env, so a per-invocation override from the
+    # `cmd:` line (llama-swap running the same compose file under two
+    # different profiles, e.g. syv vs syv-max) needs these named here to
+    # reach the container at all. Unset ones fall through to
+    # start_qwen.sh's own defaults (CTX=fast, SPEC=mtp, PREFIX_CACHE unset).
+    CTX: ${CTX:-}
+    SPEC: ${SPEC:-}
+    PREFIX_CACHE: ${PREFIX_CACHE:-}
+    DFLASH_TOKENS: ${DFLASH_TOKENS:-}
   volumes:
     - ${MODELS_DIR:-./models}:/app/models
     - qwen-cache:/cache
