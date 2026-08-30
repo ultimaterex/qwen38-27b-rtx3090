@@ -451,6 +451,37 @@ if [ -n "${CUDAGRAPH_MODE:-}" ] && [ -z "${CG_MODE:-}" ]; then
   CG_MODE=",\"cudagraph_mode\":\"$CUDAGRAPH_MODE\""
 fi
 
+# KV_OFFLOAD_GB: CPU KV-cache offload tier, vLLM's native OffloadingConnector
+# (0.27.1+, vllm/v1/kv_offload/cpu/spec.py). On overflow the coldest KV blocks
+# move to pinned host RAM instead of being dropped; a later hit for the same
+# prefix transfers them back over PCIe instead of recomputing. Same idea
+# PREFIX_CACHE already trades on for the GPU-resident pool, just backed by a
+# much bigger RAM pool behind it. Unset/0 (default) leaves this off.
+#
+# Requires --enable-prefix-caching: this checkpoint is hybrid attention+DeltaNet,
+# and the connector asserts GPU block size divides the hash block size, which
+# only holds with prefix caching on (vllm/v1/kv_offload/base.py). So
+# KV_OFFLOAD_GB without PREFIX_CACHE=1 is refused here rather than left to fail
+# inside vLLM's assert.
+#
+# CTX=huge (KVarN) hits gotcha 42's asymmetric-block-size bug: the drafter's
+# sliding-window group's 128-token chunks against the 2,176-token maximum meant
+# one request's blocks could evict every previous document, 0 bytes ever read
+# back, nothing in the logs. patches/offload-dflash-eagle-groups.patch fixes the
+# grouping and makes the config builder warn at boot with the cpu_bytes_to_use
+# multiplier (~17x) that geometry needs, instead of failing silently. CTX=fast's
+# uniform bf16 KV doesn't hit this at all.
+if [ -n "${KV_OFFLOAD_GB:-}" ] && [ "${KV_OFFLOAD_GB:-0}" != 0 ]; then
+  if [ "${PREFIX_CACHE:-0}" != 1 ]; then
+    echo "[start_qwen] KV_OFFLOAD_GB needs PREFIX_CACHE=1: this checkpoint is hybrid" >&2
+    echo "  attention+DeltaNet, and the OffloadingConnector asserts GPU block size" >&2
+    echo "  divides the hash block size, which only holds with prefix caching on." >&2
+    exit 1
+  fi
+  KV_OFFLOAD_BYTES=$(( KV_OFFLOAD_GB * 1073741824 ))
+  EXTRA_ARGS="--kv-transfer-config {\"kv_connector\":\"OffloadingConnector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"cpu_bytes_to_use\":$KV_OFFLOAD_BYTES}} ${EXTRA_ARGS}"
+fi
+
 # ASYNC_SCHED=0 (set above for a long DFlash2 verify block) runs the scheduler
 # synchronously, which is the only path on which vLLM lets the worker choose how many draft
 # tokens to put up for verification. Note --async-scheduling is already the default in
@@ -555,6 +586,22 @@ if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null || [ -n "${WSL_DIST
     "WSL detected: PYTORCH_CUDA_ALLOC_CONF=$ALLOC_DEFAULT (VMM breaks Marlin repack under the paravirt driver; set it explicitly to override)"
 else
   ALLOC_DEFAULT=expandable_segments:True
+fi
+# KV_OFFLOAD_GB (above) needs the non-expandable allocator: the
+# OffloadingConnector refuses config validation against expandable_segments,
+# which is otherwise native Linux's default here (gotcha 42).
+if [ -n "${KV_OFFLOAD_GB:-}" ] && [ "${KV_OFFLOAD_GB:-0}" != 0 ]; then
+  if [ -n "${PYTORCH_CUDA_ALLOC_CONF:-}" ]; then
+    case "$PYTORCH_CUDA_ALLOC_CONF" in
+      *expandable_segments:False*) ;;
+      *) echo "[start_qwen] WARNING: KV_OFFLOAD_GB is set but PYTORCH_CUDA_ALLOC_CONF=" \
+              "$PYTORCH_CUDA_ALLOC_CONF was set explicitly and won't be overridden -- the" \
+              "OffloadingConnector will refuse config validation unless it contains" \
+              "expandable_segments:False." >&2 ;;
+    esac
+  else
+    ALLOC_DEFAULT=expandable_segments:False
+  fi
 fi
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-$ALLOC_DEFAULT}
 export VLLM_USE_FLASHINFER_SAMPLER=0

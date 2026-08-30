@@ -54,6 +54,7 @@ x-qwen: &qwen
     SPEC: ${SPEC:-}
     PREFIX_CACHE: ${PREFIX_CACHE:-}
     DFLASH_TOKENS: ${DFLASH_TOKENS:-}
+    KV_OFFLOAD_GB: ${KV_OFFLOAD_GB:-}
   volumes:
     - ${MODELS_DIR:-./models}:/app/models
     - qwen-cache:/cache

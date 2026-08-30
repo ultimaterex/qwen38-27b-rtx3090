@@ -600,6 +600,24 @@ Things that each cost us hours, in rough order of pain. Worth skimming before yo
     two-token label difference shifts every block hash and manufactures a
     convincing, fake "per-request hash instability" (ask how we know).
 
+    **`KV_OFFLOAD_GB` (single-user/batch launchers, 2026-08-30): don't enable
+    at `CTX=huge`.** Boot-tested `qwen-3.8-27b-syv-max` with
+    `KV_OFFLOAD_GB=16` and hit this exact warning at boot: group 8 (the
+    dflash2 drafter's SW layers) at 128-token chunks against a 2,176-token
+    block maximum, ~17x waste factor. That multiplier means there is no
+    realistic RAM budget that fixes it — matching it honestly would need
+    ~272 GiB for a 16 GiB "real" tier, and short of that a single long
+    request can still evict everything, exactly the "41 GB written, 0 bytes
+    read back" failure mode this gotcha describes. `CTX=fast` (syv, bf16,
+    uniform chunks) and `batch/start_qwen.sh` (no speculative decoding, so no
+    drafter SW group at all) don't hit this and are both boot-verified
+    working — `KV_OFFLOAD_GB` is enabled on `qwen-3.8-27b-syv` (8 GiB) and
+    wired-but-currently-unused on `qwen-3.8-27b-syv-swarm` (16 GiB, no
+    production traffic on that mode yet) in llama-swap.yml. Revisit syv-max
+    if the real fix (per-group block sizing, or excluding the SW group from
+    store/lookup — see the patch comment above) lands upstream or gets
+    written here with a proper residue-sweep verification pass.
+
 
 43. **vLLM already ships per-request timing and cache-hit stats natively
     (0.27.1+) - three flags, not a patch.** `--enable-per-request-metrics`

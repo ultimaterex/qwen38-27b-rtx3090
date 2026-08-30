@@ -89,6 +89,27 @@ if [ "${PREFIX_CACHE:-0}" = "1" ]; then
   EXTRA_ARGS="--enable-prefix-caching --mamba-cache-mode align ${EXTRA_ARGS}"
 fi
 
+# KV_OFFLOAD_GB: CPU KV-cache offload tier, vLLM's native OffloadingConnector
+# (0.27.1+, vllm/v1/kv_offload/cpu/spec.py) -- same feature and same
+# requirements as single-user/start_qwen.sh's KV_OFFLOAD_GB (see that script's
+# comment for the full explanation). Batch mode runs no speculative decoding,
+# so it has no drafter sliding-window group and doesn't hit the KVarN
+# asymmetric-block-size bug (gotcha 42, patches/offload-dflash-eagle-groups.patch)
+# that makes this ineffective on syv-max -- geometry here is uniform on every
+# KV mode (fp8/kvarn/int4pth), so this should be clean. Not yet measured under
+# real 64-concurrent load, though: verify with the connector's boot warnings
+# before trusting a size.
+if [ -n "${KV_OFFLOAD_GB:-}" ] && [ "${KV_OFFLOAD_GB:-0}" != 0 ]; then
+  if [ "${PREFIX_CACHE:-0}" != 1 ]; then
+    echo "[start_qwen] KV_OFFLOAD_GB needs PREFIX_CACHE=1: this checkpoint is hybrid" >&2
+    echo "  attention+DeltaNet, and the OffloadingConnector asserts GPU block size" >&2
+    echo "  divides the hash block size, which only holds with prefix caching on." >&2
+    exit 1
+  fi
+  KV_OFFLOAD_BYTES=$(( KV_OFFLOAD_GB * 1073741824 ))
+  EXTRA_ARGS="--kv-transfer-config {\"kv_connector\":\"OffloadingConnector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"cpu_bytes_to_use\":$KV_OFFLOAD_BYTES}} ${EXTRA_ARGS}"
+fi
+
 # Tool / function calling. Without BOTH flags vLLM rejects any request carrying
 # `tools` with tool_choice "auto": 400 '"auto" tool choice requires
 # --enable-auto-tool-choice and --tool-call-parser to be set'. TOOLS=0 turns it off.
@@ -151,6 +172,22 @@ if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null || [ -n "${WSL_DIST
     "WSL detected: PYTORCH_CUDA_ALLOC_CONF=$ALLOC_DEFAULT (VMM breaks Marlin repack under the paravirt driver; set it explicitly to override)"
 else
   ALLOC_DEFAULT=expandable_segments:True
+fi
+# KV_OFFLOAD_GB (above) needs the non-expandable allocator: the
+# OffloadingConnector refuses config validation against expandable_segments,
+# which is otherwise native Linux's default here (gotcha 42).
+if [ -n "${KV_OFFLOAD_GB:-}" ] && [ "${KV_OFFLOAD_GB:-0}" != 0 ]; then
+  if [ -n "${PYTORCH_CUDA_ALLOC_CONF:-}" ]; then
+    case "$PYTORCH_CUDA_ALLOC_CONF" in
+      *expandable_segments:False*) ;;
+      *) echo "[start_qwen] WARNING: KV_OFFLOAD_GB is set but PYTORCH_CUDA_ALLOC_CONF=" \
+              "$PYTORCH_CUDA_ALLOC_CONF was set explicitly and won't be overridden -- the" \
+              "OffloadingConnector will refuse config validation unless it contains" \
+              "expandable_segments:False." >&2 ;;
+    esac
+  else
+    ALLOC_DEFAULT=expandable_segments:False
+  fi
 fi
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-$ALLOC_DEFAULT}
 # flashinfer's sampling.cu does not build with older system nvcc (12.0);

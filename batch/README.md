@@ -151,6 +151,7 @@ All overridable as env vars, defaults in the script:
 | `TOOLS` | 1 | tool/function calling (`--enable-auto-tool-choice --tool-call-parser`). `TOOL_PARSER` (`qwen3_coder`) must match the XML call format this model's chat template emits — `hermes` parses the JSON a Qwen model does *not* produce here, and fails silently. 0 = off, and `tool_choice: "auto"` then 400s |
 | `PORT` | 18020 | |
 | `GPU_UTIL` | 0.972 | do not raise, see gotchas in the main README. Use 0.93 when you want `prompt_logprobs` (quality checks) |
+| `KV_OFFLOAD_GB` | unset (off) | CPU KV-cache offload tier, vLLM's native `OffloadingConnector` (0.27.1+): overflowed KV blocks move to pinned host RAM instead of being dropped, transferred back over PCIe on a later prefix-cache hit instead of recomputed. GiB of host RAM to give the tier. Requires `PREFIX_CACHE=1` (refused otherwise) and forces `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False` — boot-tested against this mode's own `expandable_segments:True`/`GPU_UTIL=0.972` requirement (single-user/README.md's gotcha 4 territory) and found clean, but only at a single idle request; re-verify under real 64-concurrent load before trusting it there. No speculative decoding in this mode means no drafter sliding-window group, so it doesn't hit the KVarN asymmetric-block-size bug that makes this ineffective on `single-user`'s `CTX=huge` (see that README's `KV_OFFLOAD_GB` row, gotcha 42) |
 
 ## Verify you're getting the numbers
 
