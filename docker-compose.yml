@@ -55,6 +55,20 @@ x-qwen: &qwen
     PREFIX_CACHE: ${PREFIX_CACHE:-}
     DFLASH_TOKENS: ${DFLASH_TOKENS:-}
     KV_OFFLOAD_GB: ${KV_OFFLOAD_GB:-}
+    # PREFILL_ATTN: int8-QK prefill attention (single-user/start_qwen.sh only,
+    # not batch/), used by syv-max (llama-swap.yml). EXTRA_ARGS: general
+    # per-invocation override slot, currently unused by any live config -
+    # kept forwarded since it's the same per-invocation gotcha as CTX/SPEC
+    # above and a future override will need it wired here regardless.
+    PREFILL_ATTN: ${PREFILL_ATTN:-}
+    EXTRA_ARGS: ${EXTRA_ARGS:-}
+    # MODEL/BASE_MODEL_DIR: point single-user/start_qwen.sh (and docker/prepare.sh's
+    # BASE_MODEL_DIR) at an alternate checkpoint under the models/ bind mount --
+    # e.g. the AutoRound quant of huihui-ai's abliterated build (2026-08-30),
+    # a sibling of the default Qwen3.8-27B-W4A16-AutoRound dir. Unset falls
+    # through to each script's own default.
+    MODEL: ${MODEL:-}
+    BASE_MODEL_DIR: ${BASE_MODEL_DIR:-}
   volumes:
     - ${MODELS_DIR:-./models}:/app/models
     - qwen-cache:/cache
