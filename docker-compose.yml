@@ -56,11 +56,17 @@ x-qwen: &qwen
     DFLASH_TOKENS: ${DFLASH_TOKENS:-}
     KV_OFFLOAD_GB: ${KV_OFFLOAD_GB:-}
     # PREFILL_ATTN: int8-QK prefill attention (single-user/start_qwen.sh only,
-    # not batch/), used by syv-max (llama-swap.yml). EXTRA_ARGS: general
-    # per-invocation override slot, currently unused by any live config -
-    # kept forwarded since it's the same per-invocation gotcha as CTX/SPEC
-    # above and a future override will need it wired here regardless.
+    # not batch/), used by syv-max (llama-swap.yml). INT8_ACT: W4A8 Marlin
+    # activation quant (single-user/batch both read it; batch/start_qwen.sh
+    # defaults it on, single-user/start_qwen.sh defaults it OFF) - forwarded
+    # so syv-max's llama-swap.yml cmd: override actually reaches the
+    # container instead of silently falling through to that off default.
+    # EXTRA_ARGS: general per-invocation override slot, currently unused by
+    # any live config - kept forwarded since it's the same per-invocation
+    # gotcha as CTX/SPEC above and a future override will need it wired here
+    # regardless.
     PREFILL_ATTN: ${PREFILL_ATTN:-}
+    INT8_ACT: ${INT8_ACT:-}
     EXTRA_ARGS: ${EXTRA_ARGS:-}
     # MODEL/BASE_MODEL_DIR: point single-user/start_qwen.sh (and docker/prepare.sh's
     # BASE_MODEL_DIR) at an alternate checkpoint under the models/ bind mount --
