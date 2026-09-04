@@ -55,6 +55,12 @@ x-qwen: &qwen
     PREFIX_CACHE: ${PREFIX_CACHE:-}
     DFLASH_TOKENS: ${DFLASH_TOKENS:-}
     KV_OFFLOAD_GB: ${KV_OFFLOAD_GB:-}
+    # API_SERVERS: batch/start_qwen.sh's --api-server-count (default 1) -
+    # multiple frontend processes sharing one engine, meant for exactly
+    # syv-swarm's shape (high request-rate, short completions -> HTTP/
+    # tokenize/serialize overhead, not raw GPU compute, is the likely
+    # bottleneck). Untested in this repo before 2026-09-04.
+    API_SERVERS: ${API_SERVERS:-}
     # PREFILL_ATTN: int8-QK prefill attention (single-user/start_qwen.sh only,
     # not batch/), used by syv-max (llama-swap.yml). INT8_ACT: W4A8 Marlin
     # activation quant (single-user/batch both read it; batch/start_qwen.sh
