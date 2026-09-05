@@ -81,6 +81,16 @@ x-qwen: &qwen
     # through to each script's own default.
     MODEL: ${MODEL:-}
     BASE_MODEL_DIR: ${BASE_MODEL_DIR:-}
+    # VISION=1 keeps the vision tower (default drops it via
+    # --language-model-only); VISION_OFFLOAD (default 1 whenever VISION=1)
+    # keeps the tower's weights in pinned host RAM instead of resident VRAM
+    # - near-free (891MB->9MB resident, +37ms/image encode, gotcha 9) and
+    # required for SPEC=dflash2 to boot at all with VISION=1 on CTX=fast
+    # (reproduced: dies in graph capture without it). Forwarded so
+    # llama-swap.yml's per-model VISION=1 override actually reaches the
+    # container instead of falling through to the off default.
+    VISION: ${VISION:-}
+    VISION_OFFLOAD: ${VISION_OFFLOAD:-}
   volumes:
     - ${MODELS_DIR:-./models}:/app/models
     - qwen-cache:/cache
