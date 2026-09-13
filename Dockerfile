@@ -1,5 +1,6 @@
 # Same stack as the README's venv install, frozen: Python 3.12 venv at /app/venv,
-# vLLM 0.27.1 (torch 2.13 / cu130 / Triton 3.7.1), every patch in patches/ applied,
+# vLLM 0.28.0 (torch 2.13 / cu130 / Triton 3.7.1), every compatible patch in
+# patches/ applied,
 # the KVarN KV cache installed, verify.sh --install run at build time.
 #
 # The base image is CUDA "base" + nvcc, not "devel": vLLM's wheels bring their own
@@ -25,14 +26,19 @@ RUN venv/bin/pip install -r docker/requirements.txt
 
 COPY . .
 RUN set -e; SP=$(venv/bin/python -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n1); \
-    for p in patches/*.patch; do echo "== $p"; patch -p1 -d "$SP" < "$p"; done; \
+    for p in patches/*.patch; do \
+      case "$p" in \
+        patches/dflash2-backport.patch) echo "== skip $p (DFlash2 is native in vLLM 0.28.0)"; continue ;; \
+      esac; \
+      echo "== $p"; patch -p1 -d "$SP" < "$p"; \
+    done; \
     bash kvarn/install.sh; \
     bash verify.sh --install
 
 # HOME is a volume: torch.compile cache (~/.cache/vllm), Triton (~/.triton),
 # FlashInfer JIT (~/.cache/flashinfer), HF hub cache.
 RUN mkdir -p /cache /app/models && chmod 1777 /cache
-ENV HOME=/cache VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1 HF_HUB_ENABLE_HF_TRANSFER=1
+ENV HOME=/cache VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1 HF_XET_HIGH_PERFORMANCE=1
 VOLUME ["/cache", "/app/models"]
 EXPOSE 18020
 ENTRYPOINT ["bash", "docker/entrypoint.sh"]

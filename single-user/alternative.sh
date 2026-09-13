@@ -34,6 +34,18 @@ fi
 
 MODEL=${MODEL:-models/Qwen3.8-27B-W4A16-AutoRound}
 DRAFT=${DRAFT:-models/Qwen3.8-27B-DFlash2-W4A16}
+# SPEC=dflash2 (default) or SPEC=off. This script used to hardcode the drafter
+# and silently ignore SPEC -- PR #46's campaign ran an "A/B" against SPEC=off
+# that was really two spec-on arms (the tell: 2.29 emitted tokens per step on
+# an arm that must read 1.00). Unrecognized values refuse for the same reason.
+SPEC=${SPEC:-dflash2}
+case "$SPEC" in
+  # draft_sample_method: see start_qwen.sh -- on 0.28 the draft-logits buffer is only
+  # allocated when the config asks, and without it acceptance drops ~16% (#73).
+  dflash2) SPEC_ARGS=(--speculative-config "{\"method\":\"dflash\",\"model\":\"$DRAFT\",\"num_speculative_tokens\":${DFLASH_TOKENS:-7},\"draft_sample_method\":\"${DRAFT_SAMPLE:-probabilistic}\"}") ;;
+  off|none) SPEC_ARGS=() ;;
+  *) echo "SPEC=$SPEC is not a mode here: dflash2 (default) or off." >&2; exit 1 ;;
+esac
 PORT=${PORT:-18020}
 GPU_UTIL=${GPU_UTIL:-0.95}   # 0.93 on WSL2 or with a desktop compositor on the card
 MAX_LEN=${MAX_LEN:-256000}   # 256000 needs the full 0.95; drop MAX_LEN before GPU_UTIL
@@ -54,7 +66,17 @@ VISION_ARGS="--language-model-only"
 PREFIX_ARGS=""
 [ "$PREFIX_CACHE" = 1 ] && PREFIX_ARGS="--enable-prefix-caching --mamba-cache-mode align"
 
-ASYNC_ARGS=$([ "$ASYNC_SCHED" = 1 ] && echo --async-scheduling || echo --no-async-scheduling)
+# Array, not $( ... || echo ... ): the fallback makes it errexit-safe, but an
+# unquoted expansion still word-splits; match SPEC_ARGS/METRICS_ARGS.
+ASYNC_ARGS=(--no-async-scheduling)
+[ "$ASYNC_SCHED" = 1 ] && ASYNC_ARGS=(--async-scheduling)
+
+# REQ_METRICS=1: per-request timing fields + usage on every response (issue #51).
+# Not with --disable-log-stats (the timing fields need the engine-stats path).
+# Array, not $( [ ] && echo ): the command substitution exits 1 when the test
+# is false, which under `set -e` killed this script silently (#59).
+METRICS_ARGS=()
+[ "${REQ_METRICS:-0}" = 1 ] && METRICS_ARGS=(--enable-per-request-metrics --enable-force-include-usage)
 
 exec vllm serve "$MODEL" \
   --served-model-name qwen3.8-27b \
@@ -66,11 +88,13 @@ exec vllm serve "$MODEL" \
   ${VISION_ARGS} \
   ${ATTN_ARGS} \
   --mamba-ssm-cache-dtype float16 \
-  ${ASYNC_ARGS} \
+  "${ASYNC_ARGS[@]}" \
   --max-num-batched-tokens 2048 \
-  --speculative-config "{\"method\":\"dflash\",\"model\":\"$DRAFT\",\"num_speculative_tokens\":$DRAFT_TOKENS}" \
+  "${SPEC_ARGS[@]}" \
   --compilation-config "{\"max_cudagraph_capture_size\":$CG,\"custom_ops\":[\"+rms_norm\",\"+silu_and_mul\"]}" \
   --reasoning-parser qwen3 \
+  --enable-prompt-tokens-details \
+  "${METRICS_ARGS[@]}" \
   --enable-auto-tool-choice --tool-call-parser qwen3_coder \
   --default-chat-template-kwargs "{\"enable_thinking\": $ENABLE_THINKING}" \
   ${PREFIX_ARGS} \

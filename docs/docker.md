@@ -4,8 +4,9 @@ The container image (same stack, frozen) and an independent WSL2 reproduction wi
 
 [← back to the main README](../README.md)
 
-The container image is the same stack, frozen: Python 3.12 venv, vLLM 0.27.1 pinned
-(torch 2.13 / cu130 / Triton 3.7.1), every patch in `patches/` applied and
+The container image is the same stack, frozen: Python 3.12 venv, vLLM 0.28.0 pinned
+(torch 2.13 / cu130 / Triton 3.7.1), every compatible patch in `patches/` applied
+(`dflash2-backport.patch` is retired because DFlash2 is native in v0.28.0), and
 `verify.sh --install` run at build time, KVarN preinstalled. Host prerequisites:
 an NVIDIA driver that speaks CUDA 13 (≥ 580), Docker with the
 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
@@ -14,10 +15,17 @@ configured as a runtime. The 250 W power limit is a host setting
 
 ```bash
 git clone https://github.com/syv-ai/qwen38-27b-rtx3090 && cd qwen38-27b-rtx3090
-echo "VLLM_API_KEY=$(openssl rand -hex 24)" > .env   # all knobs live in .env (gitignored)
+cp .env.example .env                              # all knobs live in .env (gitignored)
+# PowerShell: Copy-Item .env.example .env
+echo "VLLM_API_KEY=$(openssl rand -hex 24)" >> .env   # skip only if the port stays on this machine
 docker compose --profile single up -d               # or --profile batch
 docker compose logs -f single
 ```
+
+The example enables the repo's recommended single-user DFlash2 profile. On
+Docker Desktop with WSL2, leave `VLLM_WSL2_ENABLE_PIN_MEMORY=1` enabled; it is
+required by the V2 runner before model loading begins. The detailed failure
+signature and other WSL2 workarounds are below.
 
 **The image is prebuilt**: every push to `main` builds and pushes
 `ghcr.io/syv-ai/qwen38-27b-rtx3090:latest` (plus an immutable `sha-<7>` tag
@@ -176,3 +184,34 @@ hard abort rather than a tuning question:
      kernel**, and that ninja build can fail here. `EXTRA_ARGS="--kv-cache-dtype
      auto"` sidesteps it — `EXTRA_ARGS` is last on the command line, so it wins
      over `KV_ARGS`.
+
+6. **Windows host memory can kill the CPU-only prepare step.** An exit 137 while
+   `prepare/quant_lm_head.py` is running, with little VRAM in use, is WSL/Docker
+   host-memory pressure rather than a GPU OOM. Give WSL enough memory and swap in
+   `%USERPROFILE%\\.wslconfig`, for example:
+
+   ```ini
+   [wsl2]
+   memory=20GB
+   swap=8GB
+   processors=8
+   ```
+
+   Run `wsl --shutdown` after changing the file, then restart Docker Desktop.
+   If the first preparation still exceeds the available host memory, set
+   `FAST_VARIANT=0` in `.env` to skip the optional ~1 GB fast-variant download;
+   this reduces the first-boot footprint but does not change the base model.
+
+   Keep Linux venv files on WSL's native filesystem when the checkout is under
+   `/mnt/c`. Some Ubuntu/DrvFs combinations fail during `python3 -m venv venv`
+   with an `ensurepip` or `Operation not permitted` error. Create the venv under
+   `$HOME` and link it into the checkout instead:
+
+   ```bash
+   python3 -m venv "$HOME/qwen38-venv"
+   ln -s "$HOME/qwen38-venv" venv
+   ```
+
+   The model directory may remain on the Windows-mounted checkout; only the
+   Linux venv needs native WSL storage. This workaround is for the manual WSL
+   venv path. The prebuilt Docker image already contains its own venv.

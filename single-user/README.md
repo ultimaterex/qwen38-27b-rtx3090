@@ -15,6 +15,9 @@ Realistic chat prompts (8 mixed English/Danish/code tasks in
 [bench/prompts_real.jsonl](../bench/prompts_real.jsonl), 1,024-token answers),
 `vllm bench serve --dataset-name custom`, RTX 3090 at 250 W:
 
+> These are vLLM 0.27.1 baseline measurements. Re-benchmark on a GPU after the
+> v0.28.0 upgrade before using the figures for capacity planning.
+
 **`CTX=fast` + fast variant (the default; 64k context)**, as reproduced by
 `bash bench/run_benchmarks.sh single`:
 
@@ -77,7 +80,8 @@ per step, which is the stable signal.
 is a 5-layer block drafter that predicts 7 tokens in one non-autoregressive
 pass from the target's layer 5/19/33/47/61 hidden states, plus a path selector
 over 16 candidates per slot. It runs on vLLM's V2 model runner through
-`patches/dflash2-backport.patch` (vLLM PR #52816 backported to 0.27.1) with the
+vLLM 0.28.0's native DFlash2 support plus
+`patches/dflash2-lookup-drafting.patch` and `patches/dflash2-ngram-chains.patch` with the
 drafter requantized to W4A16 by this repo (1.19 GB instead of 3.85 GB —
 `drafter/README.md`): per step it reads ~1 GB of drafter plus an 8-token verify,
 26.5 ms vs MTP's 24.8, and accepts 3.2-3.4 tokens per step at default sampling
@@ -296,7 +300,7 @@ attempt that did not help).
 
 k=4 is the fastest but not the default: on the FlashInfer attention backend
 (the only one that supports fp8 KV on Ampere, and fp8 KV is what makes 150k
-context fit) vLLM 0.27.1 dies with an illegal memory access as soon as one
+context fit) the vLLM 0.28.0 FlashInfer path dies with an illegal memory access as soon as one
 request finishes while another is mid-generation with 4 drafts (with or
 without our patches; the vendored PR #50021 bounds fix does not cure it;
 club-3090 sees the same "n=4 eventually dies, n=3 stable" on their rigs, and
@@ -392,7 +396,8 @@ included (`tools` + `tool_choice: "auto"` come back as `tool_calls`).
 | `TOOLS` | 1 | tool/function calling (`--enable-auto-tool-choice --tool-call-parser`). `TOOL_PARSER` (`qwen3_coder`) must match the XML call format this model's chat template emits — `hermes` parses the JSON a Qwen model does *not* produce here, and fails silently. 0 = off, and `tool_choice: "auto"` then 400s |
 | `VISION` | 0 | 1 keeps the vision tower instead of `--language-model-only` (0.858 GiB of BF16 weights on this checkpoint), for a client that sends images: one image per prompt and a 2048-image-token pixel cap, both overridable from `EXTRA_ARGS` |
 | `VISION_OFFLOAD` | 1 | with `VISION=1`, keeps the tower's weights in pinned host RAM and copies each module to the GPU for its own forward (`patches/vision-tower-cpu-offload.patch`). **On 24 GB, `SPEC=dflash2` + `VISION=1` does not boot with this off** — the tower is 0.85 GiB of the ~1.1 GiB transient margin, and graph capture OOMs allocating the 960 MiB split-KV verify buffer with 787 MiB free. With it on, the same config comes up at the full 69,758-token pool and reads images. Costs 296 → 333 ms of encode per 8192-patch image, output bit-exact. 0 only on a card with headroom to spare. `VLLM_VISION_CPU_OFFLOAD_GB` (default 1) is the budget in GiB |
-| `KV_OFFLOAD_GB` | unset (off) | CPU KV-cache offload tier, vLLM's native `OffloadingConnector` (0.27.1+): overflowed KV blocks move to pinned host RAM instead of being dropped, and a later hit for the same prefix transfers them back over PCIe instead of recomputing. GiB of host RAM to give the tier; ~80 KB/token at `CTX=fast` (same bytes/token as the GPU pool — 8 GiB ≈ 107k tokens of cold storage, roughly 1.5x the 69,758-token GPU-resident pool). Requires `PREFIX_CACHE=1` — refused otherwise, since this checkpoint's hybrid attention+DeltaNet layout needs prefix caching for the connector's block-size assertion — and forces `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False` (the connector refuses config validation against the expandable allocator this stack otherwise defaults to). **Do not use with `CTX=huge`**: KVarN's drafter sliding-window group has 128-token chunks against a 2,176-token block maximum, so the CPU tier allocates uniform blocks sized for the max and one long request can evict the whole tier — cross-request reuse will likely never hit (issue #33, gotcha 42). `patches/offload-dflash-eagle-groups.patch` warns at boot with the waste-factor multiplier (~17x measured here) instead of failing silently, but there's no RAM budget that makes it worth enabling at `CTX=huge` today. Verified clean at `CTX=fast` (this mode) and in `batch/start_qwen.sh` (no drafter there, so no asymmetric-chunk problem) |
+| `KV_OFFLOAD_GB` | unset (off) | **Local-only, not upstream** (docs/gotchas.md, gotcha 38 addendum, 2026-09-13) — this row describes our local `feature/kv-offload` branch's wiring, which the deployed `ghcr.io/syv-ai/qwen38-27b-rtx3090:latest` image does not build, so setting it in production is a silent no-op. CPU KV-cache offload tier, vLLM's native `OffloadingConnector` (0.27.1+): overflowed KV blocks move to pinned host RAM instead of being dropped, and a later hit for the same prefix transfers them back over PCIe instead of recomputing. GiB of host RAM to give the tier; ~80 KB/token at `CTX=fast` (same bytes/token as the GPU pool — 8 GiB ≈ 107k tokens of cold storage, roughly 1.5x the 69,758-token GPU-resident pool). Requires `PREFIX_CACHE=1` — refused otherwise, since this checkpoint's hybrid attention+DeltaNet layout needs prefix caching for the connector's block-size assertion — and forces `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False` (the connector refuses config validation against the expandable allocator this stack otherwise defaults to). **Do not use with `CTX=huge`**: KVarN's drafter sliding-window group has 128-token chunks against a 2,176-token block maximum, so the CPU tier allocates uniform blocks sized for the max and one long request can evict the whole tier — cross-request reuse will likely never hit (issue #33, gotcha 42). `patches/offload-dflash-eagle-groups.patch` warns at boot with the waste-factor multiplier (~17x measured here) instead of failing silently, but there's no RAM budget that makes it worth enabling at `CTX=huge` today. Verified clean at `CTX=fast` (this mode) and in `batch/start_qwen.sh` (no drafter there, so no asymmetric-chunk problem) |
+| `REQ_METRICS` | 0 | 1 = `--enable-per-request-metrics --enable-force-include-usage`: per-request timing fields in every response and `usage` on every request, the fields llama-swap's dashboard reads ([#51](https://github.com/syv-ai/qwen38-27b-rtx3090/issues/51)). `prompt_tokens_details.cached_tokens` is always on. Not compatible with `--disable-log-stats` in `EXTRA_ARGS`; vLLM's per-request spec-decode summary flag is nightly-only, not in 0.27.1 |
 | `PORT` | 18020 | |
 
 ## Switching modes

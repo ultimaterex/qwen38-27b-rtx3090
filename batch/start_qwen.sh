@@ -123,10 +123,20 @@ fi
 # which reads as the model being bad at tools rather than as a misconfigured server.
 # The name is the call format, not the checkpoint -- nothing here is Qwen3-Coder.
 # qwen3_coder, qwen3_xml and mimo are three names for one Qwen3EngineToolParser in
-# 0.27.1, which is the tool-side adapter of the same parser engine that
+# 0.28.0, which is the tool-side adapter of the same parser engine that
 # --reasoning-parser qwen3 already uses (vllm/parser/qwen3.py).
 TOOL_PARSER=${TOOL_PARSER:-qwen3_coder}
-TOOL_ARGS=$([ "${TOOLS:-1}" = 1 ] && echo --enable-auto-tool-choice --tool-call-parser $TOOL_PARSER)
+# Array, not $( [ ] && echo ): exits 1 when TOOLS is off (the shape #59 fixed)
+# and word-splits $TOOL_PARSER; the array keeps the parser as one element.
+TOOL_ARGS=()
+[ "${TOOLS:-1}" = 1 ] && TOOL_ARGS=(--enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER")
+
+# REQ_METRICS=1: per-request timing fields + usage on every response (issue #51).
+# Not with --disable-log-stats (the timing fields need the engine-stats path).
+# Array, not $( [ ] && echo ): the command substitution exits 1 when the test
+# is false, which under `set -e` killed this script silently (#59).
+METRICS_ARGS=()
+[ "${REQ_METRICS:-0}" = 1 ] && METRICS_ARGS=(--enable-per-request-metrics --enable-force-include-usage)
 
 # Vision. --language-model-only drops the vision tower cleanly -- no weights loaded,
 # 0.858 GiB on this checkpoint (gotcha 9) -- and stays the default. VISION=1 keeps
@@ -220,5 +230,7 @@ exec venv/bin/vllm serve "$MODEL" \
   --max-num-batched-tokens 2048 \
   --compilation-config "{\"max_cudagraph_capture_size\":64,\"custom_ops\":[\"+rms_norm\",\"+silu_and_mul\"]}" \
   --reasoning-parser qwen3 \
-  ${TOOL_ARGS} \
+  --enable-prompt-tokens-details \
+  "${METRICS_ARGS[@]}" \
+  "${TOOL_ARGS[@]}" \
   ${EXTRA_ARGS}
